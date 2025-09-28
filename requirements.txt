@@ -1,0 +1,5 @@
+python-dotenv
+semantic-kernel[azure] 
+fastmcp
+uvicorn
+fastapi[standard]
