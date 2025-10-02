@@ -50,6 +50,7 @@ def get_chat_history(session_id: str) -> ChatHistory:
 # ==============================
 def agent_response_callback(message: ChatMessageContent):
     # Print the main message only once
+    print(message)
     if message.content.strip():
         print(f"{message.name}: {message.content}")
         print("from agent_response_callback")
@@ -66,3 +67,16 @@ def agent_response_callback(message: ChatMessageContent):
             print(f"✅ Result from '{item.name}': {item.result}")
 
     # return return_message
+
+
+def last_n_prompt(history: ChatHistory, n: int = 5) -> str:
+    # Get last n messages
+    last_messages = history[-n:] if len(history) > n else history
+    
+    # Build a temporary ChatHistory with just those
+    temp_history = ChatHistory()
+    for msg in last_messages:
+        temp_history.add_message(msg)
+    
+    # Convert to prompt string
+    return temp_history.to_prompt()

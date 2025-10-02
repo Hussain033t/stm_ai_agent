@@ -5,9 +5,9 @@ from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from semantic_kernel.agents import HandoffOrchestration
-from semantic_kernel.contents import ChatMessageContent, AuthorRole
+from semantic_kernel.contents import ChatMessageContent, AuthorRole, ChatHistory
 from agents import get_agents, create_handoffs
-from util import start_runtime, stop_runtime, agent_response_callback, runtime
+from util import start_runtime, stop_runtime, agent_response_callback, runtime, last_n_prompt
 
 app = FastAPI()
 load_dotenv()
@@ -63,15 +63,17 @@ def make_human_response_function(session_id: str):
 
 async def process_agent_message(session_id: str, user_message: str):
     session = chat_sessions[session_id]
-    history = session["history"]
+    history: ChatHistory = session["history"]
     orchestration = session["orchestration"]
+    history_prompt = last_n_prompt(history=history, n = 10)
+    task_prompt = f'Conversation so Far:{history_prompt} Current Request: {user_message}'
     orchestration_result = await orchestration.invoke(
-        task=user_message,
-        runtime=runtime,
+        task=task_prompt,
+        runtime=runtime
     )
     value = await orchestration_result.get()
     # Save agent reply to history and queue for polling
-    history.append({"role": "assistant", "content": value})
+    history.add_message(ChatMessageContent(role=AuthorRole.ASSISTANT, content=value))
     session["unpolled_agent_messages"].append({
         "role": "assistant",
         "content": value,
@@ -91,7 +93,7 @@ async def start_session():
         human_response_function=make_human_response_function(session_id)
     )
     chat_sessions[session_id] = {
-        "history": [],
+        "history": ChatHistory(),
         "orchestration": orchestration,
         "unpolled_agent_messages": [],
         "pending_human_input": [],
@@ -105,9 +107,9 @@ async def send_message(request: SendMessageRequest, background_tasks: Background
     if session_id not in chat_sessions:
         raise HTTPException(status_code=404, detail="Session not found")
     session = chat_sessions[session_id]
-    history = session["history"]
+    history: ChatHistory = session["history"]
     # Add user message to history
-    history.append({"role": "user", "content": user_message})
+    history.add_message(ChatMessageContent(role=AuthorRole.USER, content=user_message))
     # If agent is waiting for human input, provide it
     if session["unpolled_agent_messages"] and session["unpolled_agent_messages"][-1].get("type") == "await_human":
         session["pending_human_input"].append(user_message)
