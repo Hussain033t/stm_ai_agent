@@ -16,6 +16,9 @@ load_dotenv()
 
 class StartSessionResponse(BaseModel):
     session_id: str
+
+class StartSessionRequest(BaseModel):
+    token: str
     
 
 class SendMessageRequest(BaseModel):
@@ -81,10 +84,11 @@ async def process_agent_message(session_id: str, user_message: str):
     })
 
 @app.post("/start_session", response_model=StartSessionResponse)
-async def start_session():
+async def start_session(request: StartSessionRequest):
     """Start a new chat session and return a session_id."""
     session_id = str(uuid.uuid4())
-    agents = await get_agents()
+    
+    agents = await get_agents(request.token)
     handoffs = create_handoffs(agents)
     orchestration = HandoffOrchestration(
         members=agents,
@@ -92,6 +96,7 @@ async def start_session():
         agent_response_callback=agent_response_callback,
         human_response_function=make_human_response_function(session_id)
     )
+
     chat_sessions[session_id] = {
         "history": ChatHistory(),
         "orchestration": orchestration,
