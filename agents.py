@@ -36,7 +36,10 @@ labor_plugin = MCPStreamableHttpPlugin(
 # ==============================
 # Agents setup
 # ==============================
-async def get_agents():
+async def get_agents(token: str):
+
+    work_order_plugin.headers = {'authorization' : token}
+    labor_plugin.headers = {'authorization' : token}
     
     await work_order_plugin.connect()
    
@@ -103,8 +106,4 @@ def create_handoffs(agents):
             description="If user asks about work orders"
         )
     )
-    return handoffs
-
-async def disconnect_mcp():
-    await work_order_plugin.close()
-    await labor_plugin.close()
+    return handoffs 
