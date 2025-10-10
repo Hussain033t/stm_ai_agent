@@ -1,7 +1,7 @@
 import os
 import uuid
 import asyncio
-from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Header
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from semantic_kernel.agents import HandoffOrchestration
@@ -16,10 +16,6 @@ load_dotenv()
 
 class StartSessionResponse(BaseModel):
     session_id: str
-
-class StartSessionRequest(BaseModel):
-    token: str
-    
 
 class SendMessageRequest(BaseModel):
     session_id: str
@@ -84,11 +80,11 @@ async def process_agent_message(session_id: str, user_message: str):
     })
 
 @app.post("/start_session", response_model=StartSessionResponse)
-async def start_session(request: StartSessionRequest):
+async def start_session(token: str = Header(...)):
     """Start a new chat session and return a session_id."""
     session_id = str(uuid.uuid4())
     
-    agents = await get_agents(request.token)
+    agents = await get_agents(token)
     handoffs = create_handoffs(agents)
     orchestration = HandoffOrchestration(
         members=agents,
@@ -131,7 +127,16 @@ async def get_response(session_id: str = Query(...)):
     session = chat_sessions[session_id]
     if session["unpolled_agent_messages"]:
         msg = session["unpolled_agent_messages"].pop(0)
-        return {"status": msg["type"], "message": msg["content"]}
+        content = msg["content"]
+        # If content is a ChatMessageContent, extract the text
+        if isinstance(content, ChatMessageContent):
+            if hasattr(content, "content") and content.content:
+                content = content.content
+            elif hasattr(content, "items") and content.items and hasattr(content.items[0], "text"):
+                content = content.items[0].text
+            else:
+                content = str(content)
+        return {"status": msg["type"], "message": content}
     return {"status": "no_new_message", "message": None}
 
 

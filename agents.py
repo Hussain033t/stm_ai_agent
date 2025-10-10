@@ -24,18 +24,18 @@ DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT")
 work_order_plugin = MCPStreamableHttpPlugin(
         name="WorkOrderMCP",
         description="Tools for managing work orders.",
-        url="http://127.0.0.1:8000/mcp",
+        url="https://stm-ai-task-mcp-bjf8d2d3fraphude.eastus2-01.azurewebsites.net/mcp",
     )
 labor_plugin = MCPStreamableHttpPlugin(
         name="LaborMCP",
         description="Tools for managing labor records.",
-        url="http://127.0.0.1:8000/mcp",
+        url="https://stm-ai-task-mcp-bjf8d2d3fraphude.eastus2-01.azurewebsites.net/mcp",
     )
 
 help_plugin = MCPStreamableHttpPlugin(
     name="HelpMCP",
     description="Knowledge base from help documentation.",
-    url="http://127.0.0.1:8002/mcp",
+    url="https://stm-ai-help-mcp-h2fga6hmgyascygk.eastus2-01.azurewebsites.net/mcp",
 )
 
 
