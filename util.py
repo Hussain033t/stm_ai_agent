@@ -11,7 +11,7 @@ from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
 from semantic_kernel.contents import ChatMessageContent, AuthorRole
 from semantic_kernel.contents import ChatHistory
 from semantic_kernel.contents import FunctionCallContent, FunctionResultContent
-from agents import disconnect_mcp
+
 
 
 # ==============================
@@ -30,7 +30,6 @@ def start_runtime():
 async def stop_runtime():
     global runtime_started
     if runtime_started:
-        await disconnect_mcp()
         await runtime.stop_when_idle()
         runtime_started = False
 
