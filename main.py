@@ -76,7 +76,7 @@ async def process_agent_message(session_id: str, user_message: str):
     )
     value = await orchestration_result.get()
     # Save agent reply to history and queue for polling
-    history.add_message(ChatMessageContent(role=AuthorRole.ASSISTANT, content=value))
+    history.add_message(value)
     session["unpolled_agent_messages"].append({
         "role": "assistant",
         "content": value,
