@@ -120,11 +120,11 @@ async def send_message(request: SendMessageRequest, background_tasks: Background
     return {"status": "message_processing"}
 
 @app.get("/get_response", response_model=GetResponseResponse)
-async def get_response(session_id: str = Query(...)):
+async def get_response(sessionId: str = Query(...)):
     """Poll for the next agent message for this session."""
-    if session_id not in chat_sessions:
+    if sessionId not in chat_sessions:
         raise HTTPException(status_code=404, detail="Session not found")
-    session = chat_sessions[session_id]
+    session = chat_sessions[sessionId]
     if session["unpolled_agent_messages"]:
         msg = session["unpolled_agent_messages"].pop(0)
         content = msg["content"]
