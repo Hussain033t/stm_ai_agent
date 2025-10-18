@@ -1,63 +1,30 @@
 import asyncio
-import os
-from fastapi import FastAPI
-from pydantic import BaseModel
-from dotenv import load_dotenv
-
-from semantic_kernel.connectors.mcp import MCPStreamableHttpPlugin
-from semantic_kernel.agents import ChatCompletionAgent, HandoffOrchestration, OrchestrationHandoffs
-from semantic_kernel.agents.runtime import InProcessRuntime
-from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
 from semantic_kernel.contents import ChatMessageContent, AuthorRole
-from semantic_kernel.contents import ChatHistory
 from semantic_kernel.contents import FunctionCallContent, FunctionResultContent
 
 
 
-# ==============================
-# Runtime singleton
-# ==============================
-runtime = InProcessRuntime()
-runtime_started = False
-return_message = ""
-
-def start_runtime():
-    global runtime_started
-    if not runtime_started:
-        runtime.start()
-        runtime_started = True
-
-async def stop_runtime():
-    global runtime_started
-    if runtime_started:
-        await runtime.stop_when_idle()
-        runtime_started = False
 
 # ==============================
 # Chat sessions (per user)
 # ==============================
-chat_sessions = {}  # {session_id: {"history": ChatHistory(), "orchestration": HandoffOrchestration}}
+chat_sessions: dict[str, dict] = {}
 
-def get_chat_history(session_id: str) -> ChatHistory:
-    if session_id not in chat_sessions:
-        chat_sessions[session_id] = {"history": ChatHistory(), "orchestration": None}
-    return chat_sessions[session_id]["history"]
 
 
 # ==============================
 # Agent response callback
 # ==============================
-def agent_response_callback(message: ChatMessageContent):
+
+def agent_response_callback(message: ChatMessageContent, session_id: str):
     # Print the main message only once
     print(message)
     if message.content.strip():
         print(f"{message.name}: {message.content}")
         print("from agent_response_callback")
-        if hasattr(runtime, 'last_agent_question'):
-            runtime.last_agent_question = message.content
-        else:
-            setattr(runtime, 'last_agent_question', message.content)
-
+        session = chat_sessions.get(session_id)
+        if session is not None:
+            session["last_agent_question"] = message.content
     # Print only tool calls/results
     for item in message.items:
         if isinstance(item, FunctionCallContent):
@@ -65,17 +32,46 @@ def agent_response_callback(message: ChatMessageContent):
         elif isinstance(item, FunctionResultContent):
             print(f"✅ Result from '{item.name}': {item.result}")
 
-    # return return_message
+   
 
 
-def last_n_prompt(history: ChatHistory, n: int = 5) -> str:
-    # Get last n messages
-    last_messages = history[-n:] if len(history) > n else history
-    
-    # Build a temporary ChatHistory with just those
-    temp_history = ChatHistory()
-    for msg in last_messages:
-        temp_history.add_message(msg)
-    
-    # Convert to prompt string
-    return temp_history.to_prompt()
+
+
+def make_human_response_function(session_id: str):
+    async def _human_response():
+        session = chat_sessions[session_id]
+        question = session.get("last_agent_question", "Agent needs input.")
+        session["unpolled_agent_messages"].append({
+            "role": "agent",
+            "content": question,
+            "type": "await_human"
+        })
+        while not session["pending_human_input"]:
+            await asyncio.sleep(0.1)
+        user_input = session["pending_human_input"].pop(0)
+        return ChatMessageContent(role=AuthorRole.USER, content=user_input)
+    return _human_response
+
+async def process_agent_message(session_id: str, user_message: str):
+    session = chat_sessions[session_id]
+    thread = session["thread"]
+    orchestration = session["orchestration"]
+    runtime = session["runtime"]
+    # Add user message to thread
+    thread.append(ChatMessageContent(role=AuthorRole.USER, content=user_message))
+    # Prepare recent history for prompt
+    recent_msgs = thread[-10:] if len(thread) > 10 else thread
+    history_prompt = "\n".join(f"{msg.role}: {msg.content}" for msg in recent_msgs)
+    task_prompt = f'Conversation so Far:{history_prompt} Current Request: {user_message}'
+    orchestration_result = await orchestration.invoke(
+        task=task_prompt,
+        runtime=runtime
+    )
+    value = await orchestration_result.get()
+    # Save agent reply to thread and queue for polling
+    thread.append(value)
+    session["unpolled_agent_messages"].append({
+        "role": "assistant",
+        "content": value,
+        "type": "agent_response"
+    })
