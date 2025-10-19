@@ -1,59 +1,72 @@
-import asyncio
 import os
-from fastapi import FastAPI
-from pydantic import BaseModel
 from dotenv import load_dotenv
-
 from semantic_kernel.connectors.mcp import MCPStreamableHttpPlugin
-from semantic_kernel.agents import ChatCompletionAgent, HandoffOrchestration, OrchestrationHandoffs
-from semantic_kernel.agents.runtime import InProcessRuntime
+from semantic_kernel.agents import ChatCompletionAgent, OrchestrationHandoffs
 from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
-from semantic_kernel.contents import ChatMessageContent, AuthorRole
-from semantic_kernel.contents import ChatHistory
+
 
 load_dotenv()
 
 # ==============================
 # Environment Variables
 # ==============================
-API_KEY = os.getenv("AZURE_OPENAI_KEY")
-ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
-DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+def require_env(var_name):
+    value = os.getenv(var_name)
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {var_name}")
+    return value
+
+API_KEY = require_env("AZURE_OPENAI_KEY")
+ENDPOINT = require_env("AZURE_OPENAI_ENDPOINT")
+DEPLOYMENT_NAME = require_env("AZURE_OPENAI_DEPLOYMENT")
+TASK_MCP_ENDPOINT = require_env("TASK_MCP_ENDPOINT")
+HELP_MCP_ENDPOINT = require_env("HELP_MCP_ENDPOINT")
 
 
-work_order_plugin = MCPStreamableHttpPlugin(
+
+async def connect_mcps(token: str):
+    work_order_plugin = MCPStreamableHttpPlugin(
         name="WorkOrderMCP",
         description="Tools for managing work orders.",
-        url="https://stm-ai-task-mcp-bjf8d2d3fraphude.eastus2-01.azurewebsites.net/mcp",
+        url=TASK_MCP_ENDPOINT,
     )
-labor_plugin = MCPStreamableHttpPlugin(
+    labor_plugin = MCPStreamableHttpPlugin(
         name="LaborMCP",
         description="Tools for managing labor records.",
-        url="https://stm-ai-task-mcp-bjf8d2d3fraphude.eastus2-01.azurewebsites.net/mcp",
+        url=TASK_MCP_ENDPOINT,
     )
 
-help_plugin = MCPStreamableHttpPlugin(
-    name="HelpMCP",
-    description="Knowledge base from help documentation.",
-    url="https://stm-ai-help-mcp-h2fga6hmgyascygk.eastus2-01.azurewebsites.net/mcp",
-)
+    help_plugin = MCPStreamableHttpPlugin(
+        name="HelpMCP",
+        description="Knowledge base from help documentation.",
+        url=HELP_MCP_ENDPOINT
+    )
 
+    work_order_plugin.headers = {'authorization': token}
+    labor_plugin.headers = {'authorization': token}
+    help_plugin.headers = {'authorization': token}
+
+    await work_order_plugin.connect()
+    await labor_plugin.connect()
+    await help_plugin.connect()
+
+    return {
+        "work_order_plugin": work_order_plugin,
+        "labor_plugin": labor_plugin,
+        "help_plugin": help_plugin
+    }
+
+async def disconnect_mcps(plugins: dict):
+    await plugins["work_order_plugin"].close()
+    await plugins["labor_plugin"].close()
+    await plugins["help_plugin"].close()
 
 # ==============================
 # Agents setup
 # ==============================
-async def get_agents(token: str):
 
-    work_order_plugin.headers = {'authorization' : token}
-    labor_plugin.headers = {'authorization' : token}
-    
-    await work_order_plugin.connect()
-   
-    await labor_plugin.connect()
-
-    await help_plugin.connect()
-
-     # --- Main agent ---
+async def get_agents(token: str, plugins: dict):
+    # --- Main agent ---
     main_agent = ChatCompletionAgent(
         service=AzureChatCompletion(
             deployment_name=DEPLOYMENT_NAME, endpoint=ENDPOINT, api_key=API_KEY
@@ -84,7 +97,7 @@ async def get_agents(token: str):
         " - If the tool response is empty or not helpful, inform the user that the documentation does not cover their request.\n"
         " - Show the URL from the tool response if applicable at the end."
         ),
-        plugins=[help_plugin]
+        plugins=[plugins["help_plugin"]]
     )
 
     task_agent = ChatCompletionAgent(
@@ -106,7 +119,7 @@ async def get_agents(token: str):
             "  Example: {\"status\": \"success\", \"details\": \"Labor LAB-5 added\"}\n\n"
             "You never answer user requests directly — you always delegate to one of the appropriate specialist agent."
         ),
-        plugins=[work_order_plugin, labor_plugin]
+        plugins=[plugins["work_order_plugin"], plugins["labor_plugin"]]
     )
 
     work_order_agent = ChatCompletionAgent(
@@ -128,7 +141,7 @@ async def get_agents(token: str):
             "  Example:\n"
             "  {\"status\": \"success\", \"details\": \"Work order WO-3 created for Site-C (Repair)\"}"
         ),
-        plugins=[work_order_plugin]
+        plugins=[plugins["work_order_plugin"]]
     )
 
     labor_agent = ChatCompletionAgent(
@@ -150,7 +163,7 @@ async def get_agents(token: str):
             "  Example:\n"
             "  {\"status\": \"success\", \"details\": \"Labor LAB-3 created for technician 'Charlie'\"}"
         ),
-        plugins=[labor_plugin]
+        plugins=[plugins["labor_plugin"]]
     )
 
     return [main_agent, help_agent, task_agent, work_order_agent, labor_agent]
@@ -159,25 +172,40 @@ def create_handoffs(agents):
     main_agent, help_agent, task_agent, work_order_agent, labor_agent = agents
     handoffs = (
         OrchestrationHandoffs()
-        .add(
+        .add_many(
             source_agent=main_agent.name,
-            target_agent=help_agent.name,
-            description="If user asks any questions related to help or documentation"
+            target_agents={
+                help_agent.name: "Transfer to this agent if the user asks any questions related to documention or help",
+                task_agent.name: "Transfer to this agent if the user requests to perform a task such as creating work order or listing labours etc..."
+            }
+        )
+        .add_many(
+            source_agent=task_agent.name,
+            target_agents={
+                work_order_agent.name: "Transfer to this agent if the user requests to perform a task related to workorder",
+                labor_agent.name: "Transfer to this agent if the user requests to perform a task related to labour"
+            }
         )
         .add(
-            source_agent=main_agent.name,
+            source_agent=work_order_agent.name,
             target_agent=task_agent.name,
-            description="If user asks about work orders or labor"
+            description="Transfer to this agent if the user's request is not related to performing a task on work orders"
+        )
+        .add(
+            source_agent=work_order_agent.name,
+            target_agent=task_agent.name,
+            description="Transfer to this agent if the user's request is not related to performing a task on labors"
         )
         .add(
             source_agent=task_agent.name,
-            target_agent=work_order_agent.name,
-            description="If user asks to create, update, or delete work orders"
+            target_agent=main_agent.name,
+            description="Transfer to this agent if the user's request is not related to performing a task"
         )
         .add(
-            source_agent=task_agent.name,
-            target_agent=labor_agent.name,
-            description="If user asks to create, update, or delete labor or technicians"
+            source_agent=help_agent.name,
+            target_agent=main_agent.name,
+            description="Transfer to this agent if the user's request is not related to documentation"
         )
     )
-    return handoffs 
+    return handoffs
+
